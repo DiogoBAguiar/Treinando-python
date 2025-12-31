@@ -1,0 +1,5 @@
+texto = input("Digite um texto: ")
+texto = texto.strip()
+palavras = texto.split()
+texto_limpo = ' '.join(palavras)
+print(f"Texto corrigido:{texto_limpo}")
