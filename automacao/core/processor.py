@@ -1,86 +1,184 @@
-# core/processor.py
 import logging
+from typing import Dict, Any, Optional
+
+# Import de Configuração
 from config import MAPA_NUMEROS
-from core.definitions import Eventos
+
+# Imports da Arquitetura de Eventos
 from core.event_bus import bus, Evento
+from core.definitions import Eventos
 
 class Processador:
+    """
+    Unidade de Processamento Lógico (NLU Simples).
+    Analisa o texto recebido e decide qual evento disparar.
+    Atua como um 'Roteador' entre a Voz e as Funcionalidades.
+    """
     def __init__(self):
-        """
-        O Processador agora é puramente LÓGICO.
-        Ele não tem mais 'braços' (self.mouse) nem 'boca' (self.voz).
-        Ele apenas escuta a Voz Reconhecida e Publica Ordens.
-        """
-        # 1. Se inscreve para ouvir o reconhecimento de voz
-        bus.inscrever(Eventos.VOZ_RECONHECIDA, self.processar_voz)
+        # Estado inicial do assistente
+        self._ativo: bool = True
         
-        # Publica que o sistema iniciou (quem estiver ouvindo, que reaja)
+        # Inscreve-se para receber transcrições de áudio
+        bus.inscrever(Eventos.VOZ_RECONHECIDA, self._processar_intencao)
+        
+        # Notifica o sistema que o cérebro está online
+        bus.publicar(Evento(Eventos.LOG_SISTEMA, {"nivel": "INFO", "msg": "Processador Lógico Iniciado", "origem": "Processador"}))
+        # Feedback visual inicial
         bus.publicar(Evento(Eventos.UI_ATUALIZAR_STATUS, {"texto": "🟢 Online"}))
-        bus.publicar(Evento(Eventos.LOG_SISTEMA, {"msg": "Processador de Eventos Iniciado"}))
-        
-        self.ativo = True
 
-    def _normalizar(self, texto):
-        # (Sua lógica de normalização fonética continua aqui - mantive resumida)
-        erros = {"jacques": "jarvis", "chaves": "jarvis", "tati pt": "chat gpt"}
-        for erro, corr in erros.items():
-            if erro in texto: texto = texto.replace(erro, corr)
+    def _normalizar_comando(self, texto_bruto: str) -> str:
+        """
+        Limpa e corrige o texto recebido para facilitar o reconhecimento.
+        Corrige nomes que o Vosk entende errado (Ex: 'Jacques' -> 'Jarvis').
+        """
+        texto = texto_bruto.lower().strip()
+        
+        # Dicionário de correções fonéticas (O que ele ouviu -> O que deveria ser)
+        correcoes = {
+            # Variações do Nome do Assistente
+            "james": "jarvis",
+            "jacques": "jarvis",
+            "javes": "jarvis",
+            "chaves": "jarvis",
+            "jarbas": "jarvis",
+            "chave": "jarvis",
+            "já fiz": "jarvis",
+            "já lhes": "jarvis",  # <--- SEU ERRO CORRIGIDO
+            "já a": "jarvis",     # <--- SEU ERRO CORRIGIDO
+            "já lhe": "jarvis",
+            "já vi": "jarvis",    # Erro comum também
+            "já fiz": "jarvis",
+            
+            # Variações do ChatGPT
+            "chatos o peter": "chat gpt",
+            "chat o peter": "chat gpt",
+            "tati pt": "chat gpt",
+            "tati petê": "chat gpt",
+            "chat gepetê": "chat gpt",
+            "chat pt": "chat gpt",
+            
+            # Verbos comuns que o Vosk erra
+            "abri ": "abrir ",
+            "abre ": "abrir "
+        }
+
+        for errado, correto in correcoes.items():
+            if errado in texto:
+                texto = texto.replace(errado, correto)
+        
         return texto
 
-    def processar_voz(self, evento):
+    def _processar_intencao(self, evento: Evento) -> None:
         """
-        Callback disparado automaticamente quando o Event Bus recebe VOZ_RECONHECIDA.
+        Callback principal. Recebe o texto, decide o que fazer e publica a ordem.
         """
-        texto_bruto = evento.dados.get("texto", "")
-        texto = self._normalizar(texto_bruto.lower().strip())
-        
-        logging.info(f"[Processador] Analisando: {texto}")
-
-        # --- LÓGICA DE ESTADO (Acordar/Dormir) ---
-        if "acordar" in texto:
-            self.ativo = True
-            bus.publicar(Evento(Eventos.UI_ATUALIZAR_STATUS, {"texto": "🟢 Ativo"}))
-            # O processador não fala mais diretamente. Ele pede pro sistema falar.
-            # (Ainda não criamos o ouvinte de voz, faremos no próximo passo)
+        texto_original = evento.dados.get("texto", "")
+        if not texto_original:
             return
 
-        if "dormir" in texto:
-            self.ativo = False
+        texto = self._normalizar_comando(texto_original)
+        
+        # Loga apenas se for algo relevante
+        if len(texto) > 2:
+            logging.debug(f"[Processador] Analisando: '{texto}' (Estado: {'Ativo' if self._ativo else 'Dormindo'})")
+
+        # =====================================================================
+        # 1. CONTROLE DE ESTADO (Prioridade Máxima)
+        # =====================================================================
+        
+        # Acordar
+        # Agora "já lhes acordar" vira "jarvis acordar" antes de chegar aqui
+        if "jarvis acordar" in texto or texto == "acordar":
+            self._ativo = True
+            bus.publicar(Evento(Eventos.CMD_FALAR, {"texto": "Estou aqui."}))
+            bus.publicar(Evento(Eventos.UI_ATUALIZAR_STATUS, {"texto": "🟢 Ativo"}))
+            return
+
+        # Dormir
+        if "jarvis dormir" in texto or texto == "dormir":
+            self._ativo = False
+            bus.publicar(Evento(Eventos.CMD_FALAR, {"texto": "Entrando em espera."}))
             bus.publicar(Evento(Eventos.UI_ATUALIZAR_STATUS, {"texto": "💤 Dormindo"}))
             bus.publicar(Evento(Eventos.UI_ATUALIZAR_GRADE, {"estado": "ocultar"}))
             return
 
-        if not self.ativo:
-            return
-
-        # --- DECISÃO DE COMANDOS (Publicação de Eventos) ---
-        
-        # 1. Sistema
-        if texto in ["tchau jarvis", "encerrar sistema"]:
+        # Comandos de Encerramento (Kill Switch)
+        if self._ativo and texto in ["encerrar sistema", "desligar assistente", "tchau jarvis"]:
+            bus.publicar(Evento(Eventos.CMD_FALAR, {"texto": "Desligando sistemas. Até logo."}))
             bus.publicar(Evento(Eventos.CMD_SISTEMA, {"acao": "desligar"}))
             return
 
-        # 2. Apps
-        if texto.startswith("abrir "):
-            nome = texto.replace("abrir ", "").strip()
-            # Em vez de self.apps.abrir(nome), publicamos o desejo:
-            bus.publicar(Evento(Eventos.CMD_APP, {"acao": "abrir", "nome": nome}))
-            
-        elif texto.startswith("fechar "):
-            nome = texto.replace("fechar ", "").strip()
-            bus.publicar(Evento(Eventos.CMD_APP, {"acao": "fechar", "nome": nome}))
+        # Se estiver dormindo, ignora qualquer outro comando
+        if not self._ativo:
+            return
 
-        # 3. Mouse
-        elif "clicar" in texto:
+        # =====================================================================
+        # 2. ROTEAMENTO DE COMANDOS
+        # =====================================================================
+
+        # --- APLICATIVOS ---
+        if texto.startswith("abrir "):
+            nome_app = texto.replace("abrir ", "").strip()
+            bus.publicar(Evento(Eventos.CMD_APP, {"acao": "abrir", "nome": nome_app}))
+            return
+
+        elif texto.startswith("fechar "):
+            nome_app = texto.replace("fechar ", "").strip()
+            if "programa" not in nome_app and "sistema" not in nome_app:
+                bus.publicar(Evento(Eventos.CMD_APP, {"acao": "fechar", "nome": nome_app}))
+            return
+
+        # --- MOUSE (Cliques e Grade) ---
+        if "grade" in texto:
+            acao = "ocultar" if ("ocultar" in texto or "sair" in texto) else "mostrar"
+            bus.publicar(Evento(Eventos.UI_ATUALIZAR_GRADE, {"estado": acao}))
+            return
+        
+        if "zerar" in texto or "limpar" in texto:
+             bus.publicar(Evento(Eventos.UI_ATUALIZAR_GRADE, {"estado": "ocultar"}))
+             return
+
+        if "clicar" in texto:
             bus.publicar(Evento(Eventos.CMD_MOUSE, {"tipo": "clique"}))
-        elif "direita" in texto:
-            bus.publicar(Evento(Eventos.CMD_MOUSE, {"tipo": "direita"}))
-        elif "grade" in texto:
-            estado = "ocultar" if "ocultar" in texto else "mostrar"
-            bus.publicar(Evento(Eventos.UI_ATUALIZAR_GRADE, {"estado": estado}))
+            return
             
-        # 4. Navegação Numérica
-        for nome_num, valor_int in MAPA_NUMEROS.items():
-            if nome_num in texto:
+        if "duplo" in texto:
+            bus.publicar(Evento(Eventos.CMD_MOUSE, {"tipo": "duplo"}))
+            return
+            
+        if "direita" in texto:
+            bus.publicar(Evento(Eventos.CMD_MOUSE, {"tipo": "direita"}))
+            return
+
+        if "rolar" in texto:
+            direcao = "baixo" if "baixo" in texto else "cima"
+            bus.publicar(Evento(Eventos.CMD_MOUSE, {"tipo": "rolar", "direcao": direcao}))
+            return
+
+        # Navegação por Grade (Números)
+        for palavra_num, valor_int in MAPA_NUMEROS.items():
+            if palavra_num in texto:
                 bus.publicar(Evento(Eventos.CMD_MOUSE, {"tipo": "mover_setor", "setor": valor_int}))
-                break
+                return
+
+        # --- TECLADO ---
+        if "selecionar tudo" in texto:
+            bus.publicar(Evento(Eventos.CMD_TECLADO, {"acao": "atalho", "dados": "ctrl+a"}))
+            return
+            
+        if "copiar" in texto:
+            bus.publicar(Evento(Eventos.CMD_TECLADO, {"acao": "atalho", "dados": "ctrl+c"}))
+            return
+            
+        if "colar" in texto:
+            bus.publicar(Evento(Eventos.CMD_TECLADO, {"acao": "atalho", "dados": "ctrl+v"}))
+            return
+            
+        if "enter" in texto:
+            bus.publicar(Evento(Eventos.CMD_TECLADO, {"acao": "atalho", "dados": "enter"}))
+            return
+
+        if texto.startswith("escrever ") or texto.startswith("digitar "):
+            mensagem = texto.replace("escrever ", "").replace("digitar ", "")
+            bus.publicar(Evento(Eventos.CMD_TECLADO, {"acao": "escrever", "dados": mensagem}))
+            return

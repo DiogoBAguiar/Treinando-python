@@ -1,58 +1,102 @@
-# core/event_bus.py
 import logging
 import threading
 from collections import defaultdict
+from typing import Dict, List, Callable, Any, Optional
 
 class Evento:
     """
-    Objeto que carrega os dados do evento.
+    Classe que representa um evento disparado no sistema.
+    Carrega o tipo do evento e um dicionário de dados (payload).
     """
-    def __init__(self, tipo, dados=None):
+    def __init__(self, tipo: str, dados: Optional[Dict[str, Any]] = None):
         self.tipo = tipo
         self.dados = dados if dados else {}
 
     def __repr__(self):
-        return f"<Evento {self.tipo}: {self.dados}>"
+        return f"<Evento type='{self.tipo}' data={self.dados}>"
 
 class EventBus:
+    """
+    Barramento de Eventos (Padrão Publish/Subscribe).
+    Gerencia a comunicação assíncrona entre os módulos do sistema.
+    Thread-Safe.
+    """
     def __init__(self):
-        # Dicionário onde a chave é o nome do evento e o valor é uma lista de funções
-        self.assinantes = defaultdict(list)
-        # Lock para garantir que threads não briguem ao publicar ao mesmo tempo
-        self._lock = threading.Lock()
+        # Mapeia: "nome_evento" -> [funcao_callback1, funcao_callback2]
+        self._assinantes: Dict[str, List[Callable[[Evento], None]]] = defaultdict(list)
+        # Assinantes que querem ouvir TUDO (wildcard)
+        self._assinantes_globais: List[Callable[[Evento], None]] = []
+        # Lock para garantir segurança entre threads (Interface vs Audio vs Logica)
+        self._lock = threading.RLock()
 
-    def inscrever(self, tipo_evento, funcao_callback):
+    def inscrever(self, tipo_evento: str, callback: Callable[[Evento], None]):
         """
-        Um módulo chama isso para 'ouvir' um tipo de evento.
-        :param tipo_evento: String (da classe Eventos)
-        :param funcao_callback: Função que receberá o objeto Evento
+        Registra uma função para ser chamada quando 'tipo_evento' ocorrer.
+        
+        :param tipo_evento: String identificadora do evento (ex: 'cmd_mouse').
+                            Use '*' para escutar todos os eventos.
+        :param callback: Função que recebe um objeto Evento.
         """
         with self._lock:
-            self.assinantes[tipo_evento].append(funcao_callback)
-            logging.debug(f"Nova inscrição em '{tipo_evento}': {funcao_callback.__name__}")
+            if tipo_evento == "*":
+                if callback not in self._assinantes_globais:
+                    self._assinantes_globais.append(callback)
+                    logging.debug(f"Novo ouvinte global registrado: {callback.__name__}")
+            else:
+                if callback not in self._assinantes[tipo_evento]:
+                    self._assinantes[tipo_evento].append(callback)
+                    logging.debug(f"Nova inscrição em '{tipo_evento}': {callback.__name__}")
 
-    def publicar(self, evento):
+    def desinscrever(self, tipo_evento: str, callback: Callable[[Evento], None]):
+        """
+        Remove um ouvinte do barramento. Útil para desligar plugins ou limpar memória.
+        """
+        with self._lock:
+            try:
+                if tipo_evento == "*":
+                    if callback in self._assinantes_globais:
+                        self._assinantes_globais.remove(callback)
+                elif tipo_evento in self._assinantes:
+                    if callback in self._assinantes[tipo_evento]:
+                        self._assinantes[tipo_evento].remove(callback)
+                        # Se não houver mais ninguém ouvindo esse evento, limpa a chave
+                        if not self._assinantes[tipo_evento]:
+                            del self._assinantes[tipo_evento]
+                logging.debug(f"Removido ouvinte de '{tipo_evento}': {callback.__name__}")
+            except ValueError:
+                logging.warning(f"Tentativa de desinscrever callback inexistente em '{tipo_evento}'")
+
+    def publicar(self, evento: Evento):
         """
         Dispara um evento para todos os interessados.
+        O processamento ocorre na Thread de quem publicou (Síncrono por padrão).
+        
+        :param evento: Objeto da classe Evento.
         """
         tipo = evento.tipo
         
-        # Se ninguém estiver ouvindo, apenas ignora (ou loga)
-        if tipo not in self.assinantes:
+        # 1. Recupera listas de callbacks (cópia defensiva para evitar erro se a lista mudar durante loop)
+        with self._lock:
+            callbacks_especificos = self._assinantes.get(tipo, [])[:]
+            callbacks_globais = self._assinantes_globais[:]
+
+        todas_callbacks = callbacks_globais + callbacks_especificos
+
+        if not todas_callbacks:
+            # logging.debug(f"Evento '{tipo}' publicado, mas ninguém ouviu.")
             return
 
-        # Notifica todos os inscritos
-        # Nota: Estamos rodando na thread de quem publicou. 
-        # Em sistemas maiores, usaríamos uma fila para processar em background.
-        with self._lock:
-            lista_callbacks = self.assinantes[tipo][:] # Cópia para segurança
-
-        for callback in lista_callbacks:
+        # 2. Executa os callbacks
+        for callback in todas_callbacks:
             try:
                 callback(evento)
             except Exception as e:
-                logging.error(f"Erro ao processar evento '{tipo}': {e}", exc_info=True)
+                # O erro de um módulo não pode derrubar o barramento
+                logging.error(
+                    f"ERRO ao processar evento '{tipo}' no callback '{callback.__name__}': {e}", 
+                    exc_info=True
+                )
 
-# Instância Global (Singleton)
-# Assim, qualquer arquivo pode fazer 'from core.event_bus import bus' e usar o mesmo canal.
+# Instância Global (Singleton Pattern)
+# Importe esta variável 'bus' em outros arquivos.
 bus = EventBus()

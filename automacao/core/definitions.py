@@ -1,25 +1,75 @@
-# core/definitions.py
+from typing import Final
 
 class Eventos:
     """
-    Lista oficial de todos os eventos que podem ocorrer no sistema.
-    Isso serve como contrato entre os módulos.
+    CONTRATO DE API DO SISTEMA (Event-Driven Architecture).
+    
+    Esta classe define todos os canais de comunicação (tópicos) do barramento.
+    Abaixo de cada constante está a definição do PAYLOAD (dados) esperado.
     """
-    # Eventos de Entrada (Sensores)
-    VOZ_RECONHECIDA = "evt_voz_reconhecida"  # Payload: {"texto": "abrir chrome"}
+
+    # =========================================================================
+    # 1. EVENTOS DE ENTRADA (Sensores)
+    # =========================================================================
     
-    # Eventos de Intenção (O que o usuário quer fazer)
-    INTENCAO_DETECTADA = "evt_intencao_detectada" # Payload: {"acao": "abrir", "alvo": "chrome"}
+    # Disparado quando o motor STT (Vosk) detecta uma frase completa.
+    # Payload: {"texto": str}
+    # Exemplo: {"texto": "abrir o navegador"}
+    VOZ_RECONHECIDA: Final[str] = "evt_voz_reconhecida"
+
+    # Disparado quando o motor de NLU identifica uma intenção clara (Fase 2 do projeto).
+    # Payload: {"intencao": str, "confianca": float, "entidades": dict}
+    INTENCAO_DETECTADA: Final[str] = "evt_intencao_detectada"
+
+    # =========================================================================
+    # 2. EVENTOS DE COMANDO (Atuadores)
+    # =========================================================================
     
-    # Eventos de Ação (Execução)
-    CMD_MOUSE = "cmd_mouse"       # Payload: {"tipo": "clique", "x": 0, "y": 0}
-    CMD_TECLADO = "cmd_teclado"   # Payload: {"teclas": ["ctrl", "c"]}
-    CMD_APP = "cmd_app"           # Payload: {"acao": "abrir", "nome": "chrome"}
-    CMD_SISTEMA = "cmd_sistema"   # Payload: {"acao": "desligar"}
+    # Ordem para o sistema de áudio falar algo (TTS).
+    # Payload: {"texto": str, "prioridade": str (opcional)}
+    # Exemplo: {"texto": "Abrindo Spotify"}
+    CMD_FALAR: Final[str] = "cmd_falar"
+
+    # Ordem para controle do mouse.
+    # Payload: {"tipo": str, ...args}
+    #   - tipo="clique" | "duplo" | "direita"
+    #   - tipo="mover_setor", "setor": int (1-9)
+    #   - tipo="rolar", "direcao": "cima"|"baixo"
+    CMD_MOUSE: Final[str] = "cmd_mouse"
+
+    # Ordem para controle de teclado.
+    # Payload: {"acao": str, "dados": str}
+    #   - acao="escrever", "dados": "texto para digitar"
+    #   - acao="atalho", "dados": "ctrl+c"
+    CMD_TECLADO: Final[str] = "cmd_teclado"
+
+    # Ordem para gestão de janelas e processos.
+    # Payload: {"acao": str, "nome": str}
+    #   - acao="abrir", "nome": "chrome"
+    #   - acao="fechar", "nome": "notepad"
+    CMD_APP: Final[str] = "cmd_app"
+
+    # Ordem global de sistema (Ciclo de Vida).
+    # Payload: {"acao": str}
+    #   - acao="desligar"
+    CMD_SISTEMA: Final[str] = "cmd_sistema"
+
+    # =========================================================================
+    # 3. EVENTOS DE INTERFACE (Feedback Visual)
+    # =========================================================================
     
-    # Eventos de Interface (Feedback)
-    UI_ATUALIZAR_STATUS = "ui_status" # Payload: {"texto": "Ouvindo...", "cor": "green"}
-    UI_ATUALIZAR_GRADE = "ui_grade"   # Payload: {"estado": "mostrar"}
+    # Atualiza o texto da legenda flutuante (HUD).
+    # Payload: {"texto": str, "tipo": str (opcional: "info"|"erro"|"sucesso")}
+    UI_ATUALIZAR_STATUS: Final[str] = "ui_status"
+
+    # Controla a exibição da grade do mouse.
+    # Payload: {"estado": str} -> "mostrar" | "ocultar"
+    UI_ATUALIZAR_GRADE: Final[str] = "ui_grade"
+
+    # =========================================================================
+    # 4. OBSERVABILIDADE (Logs e Debug)
+    # =========================================================================
     
-    # Eventos de Log/Debug
-    LOG_SISTEMA = "log_sistema"       # Payload: {"nivel": "INFO", "msg": "..."}
+    # Evento genérico para logs centralizados.
+    # Payload: {"nivel": str, "msg": str, "origem": str}
+    LOG_SISTEMA: Final[str] = "log_sistema"

@@ -4,6 +4,7 @@ import edge_tts
 import asyncio
 import threading
 import logging
+import winsound # <--- NOVO: Biblioteca nativa do Windows para sons de sistema
 from core.event_bus import bus, Evento
 from core.definitions import Eventos
 
@@ -60,6 +61,13 @@ class Speaker:
             asyncio.run(self._gerar_e_tocar(texto))
         except Exception as e:
             logging.error(f"Erro na síntese de voz: {e}")
+            # --- FALLBACK DE EMERGÊNCIA ---
+            # Se a voz falhar (ex: sem internet), faz um Beep para o usuário saber.
+            try:
+                # Frequência 400Hz (Grave), Duração 400ms
+                winsound.Beep(400, 400) 
+            except:
+                pass
 
     async def _gerar_e_tocar(self, texto):
         """
@@ -69,20 +77,18 @@ class Speaker:
         
         try:
             # 1. Gera o arquivo de áudio (Edge TTS)
+            # Pode falhar aqui se estiver sem internet
             comunicate = edge_tts.Communicate(texto, VOZ_ESCOLHIDA)
             await comunicate.save(arquivo_mp3)
             
             # 2. Reproduz o áudio
             if os.path.exists(arquivo_mp3):
-                # Se já estiver tocando algo, espera um pouco ou interrompe?
-                # Aqui optamos por interromper o anterior para dar prioridade ao novo aviso
                 if pygame.mixer.music.get_busy():
                     pygame.mixer.music.stop()
                 
                 pygame.mixer.music.load(arquivo_mp3)
                 pygame.mixer.music.play()
                 
-                # Aguarda o áudio terminar
                 while pygame.mixer.music.get_busy():
                     pygame.time.Clock().tick(10)
                 
@@ -91,4 +97,5 @@ class Speaker:
         except PermissionError:
             logging.warning("Conflito de arquivo de áudio (fala muito rápida).")
         except Exception as e:
-            logging.error(f"Falha no Edge-TTS: {e}")
+            # Relança o erro para cair no except do _thread_wrapper e tocar o Beep
+            raise e
